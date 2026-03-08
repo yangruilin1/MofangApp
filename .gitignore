@@ -1,0 +1,12 @@
+﻿.gradle/
+.gradle-wrapper/
+build/
+*/build/
+local.properties
+android-sdk/
+tools/
+gradle-7.6.4-bin.zip
+.tmp-*
+.idea/
+*.iml
+

@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 魔方仿真 - 记录与还原</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: sans-serif;
+            touch-action: none;
+        }
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            color: #fff;
+            background-color: #007bff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        #status {
+            position: absolute;
+            top: 70px;
+            left: 20px;
+            color: #ccc;
+            font-size: 14px;
+            line-height: 1.6;
+            pointer-events: none;
+        }
+        .highlight {
+            color: #fff;
+        }
+        
+        /* 操作记录面板样式 */
+        #history-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 220px;
+            max-height: 80vh;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-y: auto;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        #history-panel h3 {
+            margin-top: 0;
+            font-size: 16px;
+            border-bottom: 1px solid #555;
+            padding-bottom: 10px;
+            text-align: center;
+        }
+        #history-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        #history-list li {
+            padding: 8px 5px;
+            border-bottom: 1px dashed #444;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        /* 正在还原时的样式 */
+        .reverting {
+            color: #00ff44;
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+    </style>
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.150.1/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.150.1/examples/jsm/"
+        }
+      }
+    </script>
+</head>
+<body>
+    <div id="ui-container">
+        <button id="btn-shuffle">随机打乱</button>
+        <button id="btn-solve" disabled>自动还原</button>
+    </div>
+    <div id="status">
+        <span class="highlight">操作说明：</span><br>
+        1. 鼠标左键点击背景拖动：旋转视角<br>
+        2. 鼠标右键拖动：平移视角<br>
+        3. 鼠标滚轮：缩放视角<br>
+        <span class="highlight">4. 鼠标左键在魔方上拖动：旋转魔方层</span>
+    </div>
+
+    <div id="history-panel">
+        <h3>操作与还原记录</h3>
+        <ul id="history-list"></ul>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(6, 5, 8);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        const CUBE_SIZE = 1;
+        const GAP = 0.05;
+        const OFFSET = CUBE_SIZE + GAP;
+        const allCubes = [];
+        const cubeGroup = new THREE.Group();
+        scene.add(cubeGroup);
+
+        const colors = [0xb90000, 0xff5900, 0xffffff, 0xffd500, 0x009b48, 0x0045ad];
+        const pivot = new THREE.Object3D();
+        scene.add(pivot);
+
+        function createFaceTexture(colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 128;
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#000000';
+            context.fillRect(0, 0, 128, 128);
+            context.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+            context.beginPath();
+            context.roundRect(4, 4, 120, 120, 16);
+            context.fill();
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const geometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+        for (let x = -1; x <= 1; x++) {
+            for (let y = -1; y <= 1; y++) {
+                for (let z = -1; z <= 1; z++) {
+                    const materials = colors.map((color, index) => {
+                        let isExterior = false;
+                        if (index === 0 && x === 1) isExterior = true;
+                        if (index === 1 && x === -1) isExterior = true;
+                        if (index === 2 && y === 1) isExterior = true;
+                        if (index === 3 && y === -1) isExterior = true;
+                        if (index === 4 && z === 1) isExterior = true;
+                        if (index === 5 && z === -1) isExterior = true;
+                        return new THREE.MeshLambertMaterial({
+                            color: isExterior ? color : 0x222222,
+                            map: createFaceTexture(isExterior ? color : 0x222222)
+                        });
+                    });
+                    const mesh = new THREE.Mesh(geometry, materials);
+                    mesh.position.set(x * OFFSET, y * OFFSET, z * OFFSET);
+                    cubeGroup.add(mesh);
+                    allCubes.push(mesh);
+                }
+            }
+        }
+
+        let moveQueue = [];
+        let moveHistory = [];
+        let isAnimating = false;
+        let currentMove = null;
+        let activeCubes = [];
+        let currentAngle = 0;
+        let targetAngle = 0;
+        const ANIMATION_SPEED = 0.15;
+
+        // UI 记录元素
+        const historyListEl = document.getElementById('history-list');
+
+        // 将坐标转换为中文描述
+        function getMoveDescription(axis, layer, direction) {
+            let layerName = "";
+            if (axis === 'x') layerName = layer === 1 ? '右层' : (layer === -1 ? '左层' : '中层');
+            if (axis === 'y') layerName = layer === 1 ? '上层' : (layer === -1 ? '下层' : '中层');
+            if (axis === 'z') layerName = layer === 1 ? '前层' : (layer === -1 ? '后层' : '中层');
+            
+            let dirName = direction === 1 ? '正向' : '反向';
+            return `${axis.toUpperCase()}轴 ${layerName} ${dirName}`;
+        }
+
+        // 渲染记录面板
+        function renderHistoryUI() {
+            historyListEl.innerHTML = '';
+            moveHistory.forEach((move, index) => {
+                const li = document.createElement('li');
+                li.textContent = `${index + 1}. ${getMoveDescription(move.axis, move.layer, move.direction)}`;
+                li.id = `log-${index}`;
+                historyListEl.appendChild(li);
+            });
+            // 自动滚动到底部
+            historyListEl.parentElement.scrollTop = historyListEl.parentElement.scrollHeight;
+        }
+
+        function processQueue() {
+            if (moveQueue.length === 0 || isAnimating) {
+                if (moveQueue.length === 0 && !isAnimating) updateUIState(false);
+                return;
+            }
+            isAnimating = true;
+            updateUIState(true);
+            currentMove = moveQueue.shift();
+            
+            // 如果是在还原模式（isReverting为true），则在UI上划掉对应的历史记录
+            if (currentMove.isReverting && currentMove.historyIndex !== undefined) {
+                const logEl = document.getElementById(`log-${currentMove.historyIndex}`);
+                if (logEl) {
+                    logEl.classList.add('reverting');
+                    logEl.textContent += ' (已还原)';
+                }
+            }
+
+            pivot.rotation.set(0, 0, 0);
+            pivot.updateMatrixWorld();
+
+            activeCubes = allCubes.filter(cube => {
+                const pos = cube.position[currentMove.axis];
+                const targetPos = currentMove.layer * OFFSET;
+                return Math.abs(pos - targetPos) < 0.1;
+            });
+
+            activeCubes.forEach(cube => pivot.attach(cube));
+            targetAngle = currentMove.direction * (Math.PI / 2);
+            currentAngle = 0;
+        }
+
+        function addMove(axis, layer, direction, record = true, isReverting = false, historyIndex = -1) {
+            moveQueue.push({ axis, layer, direction, isReverting, historyIndex });
+            if (record) {
+                moveHistory.push({ axis, layer, direction });
+                renderHistoryUI();
+            }
+            if (!isAnimating) processQueue();
+        }
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const startMouse = new THREE.Vector2();
+        let clickedCube = null;
+        let intersectNormal = null;
+
+        function getNormalizedMousePos(event) {
+            return {
+                x: (event.clientX / window.innerWidth) * 2 - 1,
+                y: -(event.clientY / window.innerHeight) * 2 + 1
+            };
+        }
+
+        window.addEventListener('pointerdown', (event) => {
+            if (isAnimating || event.button !== 0) return;
+
+            const pos = getNormalizedMousePos(event);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+            startMouse.copy(mouse);
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(cubeGroup.children);
+
+            if (intersects.length > 0) {
+                controls.enabled = false;
+                clickedCube = intersects[0].object;
+                
+                const normalMatrix = new THREE.Matrix3().getNormalMatrix(clickedCube.matrixWorld);
+                intersectNormal = intersects[0].face.normal.clone().applyMatrix3(normalMatrix).normalize();
+                
+                intersectNormal.x = Math.round(intersectNormal.x);
+                intersectNormal.y = Math.round(intersectNormal.y);
+                intersectNormal.z = Math.round(intersectNormal.z);
+            }
+        });
+
+        window.addEventListener('pointerup', (event) => {
+            if (!controls.enabled && clickedCube) {
+                controls.enabled = true;
+                
+                const pos = getNormalizedMousePos(event);
+                mouse.x = pos.x;
+                mouse.y = pos.y;
+
+                const dragDistance = startMouse.distanceTo(mouse);
+                if (dragDistance > 0.05) {
+                    const p1 = new THREE.Vector3(startMouse.x, startMouse.y, 0.5).unproject(camera);
+                    const p2 = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
+                    const dragVectorWorld = p2.sub(p1).normalize();
+
+                    const rotationAxisVec = new THREE.Vector3().crossVectors(intersectNormal, dragVectorWorld);
+
+                    let axis = 'x';
+                    let maxVal = Math.abs(rotationAxisVec.x);
+                    let direction = Math.sign(rotationAxisVec.x);
+
+                    if (Math.abs(rotationAxisVec.y) > maxVal) {
+                        axis = 'y';
+                        maxVal = Math.abs(rotationAxisVec.y);
+                        direction = Math.sign(rotationAxisVec.y);
+                    }
+                    if (Math.abs(rotationAxisVec.z) > maxVal) {
+                        axis = 'z';
+                        maxVal = Math.abs(rotationAxisVec.z);
+                        direction = Math.sign(rotationAxisVec.z);
+                    }
+
+                    const layerPos = clickedCube.position[axis];
+                    const layer = Math.round(layerPos / OFFSET);
+                    direction = direction > 0 ? 1 : -1;
+
+                    addMove(axis, layer, direction, true);
+                }
+            }
+            clickedCube = null;
+            intersectNormal = null;
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        const btnShuffle = document.getElementById('btn-shuffle');
+        const btnSolve = document.getElementById('btn-solve');
+        const axes = ['x', 'y', 'z'];
+        const layers = [-1, 0, 1];
+        const directions = [-1, 1];
+
+        function updateUIState(working) {
+            btnShuffle.disabled = working;
+            btnSolve.disabled = working || moveHistory.length === 0;
+        }
+
+        btnShuffle.addEventListener('click', () => {
+            moveHistory = [];
+            renderHistoryUI();
+            for (let i = 0; i < 20; i++) {
+                const randomAxis = axes[Math.floor(Math.random() * axes.length)];
+                const randomLayer = layers[Math.floor(Math.random() * layers.length)];
+                const randomDir = directions[Math.floor(Math.random() * directions.length)];
+                addMove(randomAxis, randomLayer, randomDir, true);
+            }
+        });
+
+        btnSolve.addEventListener('click', () => {
+            // 从最后一步开始反向操作
+            for (let i = moveHistory.length - 1; i >= 0; i--) {
+                const move = moveHistory[i];
+                // 参数：轴，层，反向，是否记录(否)，是否还原中(是)，对应历史索引
+                addMove(move.axis, move.layer, move.direction * -1, false, true, i);
+            }
+            // 队列执行完毕后会清空历史数据
+            moveHistory = [];
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (isAnimating) {
+                const step = ANIMATION_SPEED * Math.sign(targetAngle);
+                if (Math.abs(targetAngle - currentAngle) <= Math.abs(step)) {
+                    pivot.rotation[currentMove.axis] = targetAngle;
+                    pivot.updateMatrixWorld();
+                    
+                    activeCubes.forEach(cube => {
+                        cubeGroup.attach(cube);
+                        cube.position.x = Math.round(cube.position.x / OFFSET) * OFFSET;
+                        cube.position.y = Math.round(cube.position.y / OFFSET) * OFFSET;
+                        cube.position.z = Math.round(cube.position.z / OFFSET) * OFFSET;
+                        
+                        cube.rotation.x = Math.round(cube.rotation.x / (Math.PI/2)) * (Math.PI/2);
+                        cube.rotation.y = Math.round(cube.rotation.y / (Math.PI/2)) * (Math.PI/2);
+                        cube.rotation.z = Math.round(cube.rotation.z / (Math.PI/2)) * (Math.PI/2);
+                        cube.updateMatrix();
+                    });
+                    
+                    isAnimating = false;
+                    
+                    // 如果刚完成的是还原的最后一步，重置UI面板
+                    if (currentMove.isReverting && currentMove.historyIndex === 0) {
+                        setTimeout(() => {
+                            historyListEl.innerHTML = '';
+                        }, 1000); // 延迟1秒清空，让用户看到最后一步的还原状态
+                    }
+
+                    processQueue();
+                } else {
+                    currentAngle += step;
+                    pivot.rotation[currentMove.axis] = currentAngle;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

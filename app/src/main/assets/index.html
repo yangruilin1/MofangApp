@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    >
+    <title>3D 魔方</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --panel-bg: rgba(0, 0, 0, 0.72);
+            --panel-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f5f5f5;
+            --text-sub: #cfcfcf;
+            --accent: #2d8cff;
+            --accent-disabled: #5e5e5e;
+            --success: #29d465;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #111;
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui-container,
+        #status,
+        #history-panel {
+            position: absolute;
+            z-index: 10;
+        }
+
+        #ui-container {
+            top: calc(env(safe-area-inset-top, 0px) + 14px);
+            left: calc(env(safe-area-inset-left, 0px) + 14px);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            max-width: min(68vw, 420px);
+        }
+
+        button {
+            min-width: 108px;
+            padding: 12px 16px;
+            border: 0;
+            border-radius: 12px;
+            background: var(--accent);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+        }
+
+        button:disabled {
+            background: var(--accent-disabled);
+            color: rgba(255, 255, 255, 0.75);
+        }
+
+        #status {
+            top: calc(env(safe-area-inset-top, 0px) + 72px);
+            left: calc(env(safe-area-inset-left, 0px) + 14px);
+            width: min(70vw, 320px);
+            padding: 12px 14px;
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            background: var(--panel-bg);
+            color: var(--text-sub);
+            font-size: 13px;
+            line-height: 1.6;
+            backdrop-filter: blur(6px);
+            pointer-events: none;
+        }
+
+        .highlight {
+            display: inline-block;
+            margin-bottom: 4px;
+            color: var(--text-main);
+            font-weight: 700;
+        }
+
+        #history-panel {
+            top: calc(env(safe-area-inset-top, 0px) + 14px);
+            right: calc(env(safe-area-inset-right, 0px) + 14px);
+            width: min(34vw, 240px);
+            max-height: min(76vh, 560px);
+            padding: 14px;
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(6px);
+            overflow-y: auto;
+        }
+
+        #history-panel h3 {
+            margin: 0 0 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 15px;
+            text-align: center;
+        }
+
+        #history-list {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        #history-list li {
+            padding: 7px 2px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.12);
+            color: var(--text-sub);
+            font-size: 13px;
+        }
+
+        .reverting {
+            color: var(--success);
+            text-decoration: line-through;
+            opacity: 0.75;
+        }
+
+        @media (max-width: 900px) {
+            #status {
+                top: auto;
+                bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+                width: min(64vw, 280px);
+            }
+
+            #history-panel {
+                width: min(40vw, 220px);
+                max-height: min(42vh, 340px);
+            }
+        }
+
+        @media (max-width: 640px) {
+            #ui-container {
+                max-width: none;
+                right: calc(env(safe-area-inset-right, 0px) + 14px);
+            }
+
+            button {
+                flex: 1 1 0;
+                min-width: 0;
+            }
+
+            #status {
+                left: calc(env(safe-area-inset-left, 0px) + 14px);
+                right: calc(env(safe-area-inset-right, 0px) + 14px);
+                width: auto;
+                font-size: 12px;
+            }
+
+            #history-panel {
+                top: auto;
+                right: calc(env(safe-area-inset-right, 0px) + 14px);
+                bottom: calc(env(safe-area-inset-bottom, 0px) + 124px);
+                width: min(48vw, 190px);
+                max-height: 34vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-container">
+        <button id="btn-shuffle">随机打乱</button>
+        <button id="btn-solve" disabled>自动还原</button>
+    </div>
+
+    <div id="status">
+        <span class="highlight">手机操作说明</span><br>
+        1. 单指拖动空白区域：旋转视角<br>
+        2. 双指拖动：平移视角<br>
+        3. 双指捏合：缩放视角<br>
+        4. 单指在魔方表面滑动：旋转对应一层<br>
+        5. 当前版本已支持完全离线游玩
+    </div>
+
+    <div id="history-panel">
+        <h3>操作记录</h3>
+        <ul id="history-list"></ul>
+    </div>
+
+    <script type="module">
+        import * as THREE from './vendor/three.module.js';
+        import { OrbitControls } from './vendor/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(6, 5, 8);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.domElement.style.touchAction = 'none';
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enablePan = true;
+        controls.enableZoom = true;
+        controls.rotateSpeed = 0.95;
+        controls.zoomSpeed = 0.9;
+        controls.panSpeed = 0.9;
+        controls.touches.ONE = THREE.TOUCH.ROTATE;
+        controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+        controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+        controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.72);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        const cubeGroup = new THREE.Group();
+        scene.add(cubeGroup);
+
+        const pivot = new THREE.Object3D();
+        scene.add(pivot);
+
+        const CUBE_SIZE = 1;
+        const GAP = 0.05;
+        const OFFSET = CUBE_SIZE + GAP;
+        const ANIMATION_SPEED = 0.15;
+        const colors = [0xb90000, 0xff5900, 0xffffff, 0xffd500, 0x009b48, 0x0045ad];
+        const allCubes = [];
+
+        let moveQueue = [];
+        let moveHistory = [];
+        let isAnimating = false;
+        let currentMove = null;
+        let activeCubes = [];
+        let currentAngle = 0;
+        let targetAngle = 0;
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const startMouse = new THREE.Vector2();
+
+        let clickedCube = null;
+        let intersectNormal = null;
+
+        const historyListEl = document.getElementById('history-list');
+        const uiContainerEl = document.getElementById('ui-container');
+        const historyPanelEl = document.getElementById('history-panel');
+        const btnShuffle = document.getElementById('btn-shuffle');
+        const btnSolve = document.getElementById('btn-solve');
+
+        let shouldClearHistoryAfterSolve = false;
+        let shouldForceSolveAfterQueue = false;
+
+        const axes = ['x', 'y', 'z'];
+        const layers = [-1, 0, 1];
+        const directions = [-1, 1];
+
+        function drawRoundedRect(context, x, y, width, height, radius) {
+            context.beginPath();
+            context.moveTo(x + radius, y);
+            context.lineTo(x + width - radius, y);
+            context.quadraticCurveTo(x + width, y, x + width, y + radius);
+            context.lineTo(x + width, y + height - radius);
+            context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            context.lineTo(x + radius, y + height);
+            context.quadraticCurveTo(x, y + height, x, y + height - radius);
+            context.lineTo(x, y + radius);
+            context.quadraticCurveTo(x, y, x + radius, y);
+            context.closePath();
+        }
+
+        function createFaceTexture(colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 128;
+
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#000000';
+            context.fillRect(0, 0, 128, 128);
+            context.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
+            drawRoundedRect(context, 4, 4, 120, 120, 16);
+            context.fill();
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createCube() {
+            const geometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+
+            for (let x = -1; x <= 1; x += 1) {
+                for (let y = -1; y <= 1; y += 1) {
+                    for (let z = -1; z <= 1; z += 1) {
+                        const materials = colors.map((color, index) => {
+                            let isExterior = false;
+
+                            if (index === 0 && x === 1) isExterior = true;
+                            if (index === 1 && x === -1) isExterior = true;
+                            if (index === 2 && y === 1) isExterior = true;
+                            if (index === 3 && y === -1) isExterior = true;
+                            if (index === 4 && z === 1) isExterior = true;
+                            if (index === 5 && z === -1) isExterior = true;
+
+                            const faceColor = isExterior ? color : 0x222222;
+                            return new THREE.MeshLambertMaterial({
+                                color: faceColor,
+                                map: createFaceTexture(faceColor)
+                            });
+                        });
+
+                        const mesh = new THREE.Mesh(geometry, materials);
+                        mesh.position.set(x * OFFSET, y * OFFSET, z * OFFSET);
+                        mesh.userData.initialPosition = mesh.position.clone();
+                        mesh.userData.initialQuaternion = mesh.quaternion.clone();
+                        cubeGroup.add(mesh);
+                        allCubes.push(mesh);
+                    }
+                }
+            }
+        }
+
+        function getMoveDescription(axis, layer, direction) {
+            let layerName = '';
+
+            if (axis === 'x') layerName = layer === 1 ? '右层' : (layer === -1 ? '左层' : '中层');
+            if (axis === 'y') layerName = layer === 1 ? '上层' : (layer === -1 ? '下层' : '中层');
+            if (axis === 'z') layerName = layer === 1 ? '前层' : (layer === -1 ? '后层' : '中层');
+
+            const dirName = direction === 1 ? '正向' : '反向';
+            return `${axis.toUpperCase()} 轴 · ${layerName} · ${dirName}`;
+        }
+
+        function renderHistoryUI() {
+            historyListEl.innerHTML = '';
+
+            moveHistory.forEach((move, index) => {
+                const li = document.createElement('li');
+                li.id = `log-${index}`;
+                li.textContent = `${index + 1}. ${getMoveDescription(move.axis, move.layer, move.direction)}`;
+                historyListEl.appendChild(li);
+            });
+
+            const panel = historyListEl.parentElement;
+            if (panel) {
+                panel.scrollTop = panel.scrollHeight;
+            }
+        }
+
+        function isCubeSolved() {
+            return allCubes.every((cube) => {
+                const positionMatches = cube.position.distanceTo(cube.userData.initialPosition) < 0.001;
+                const quaternionMatches = cube.quaternion.angleTo(cube.userData.initialQuaternion) < 0.001;
+                return positionMatches && quaternionMatches;
+            });
+        }
+
+        function forceSolveCubeState() {
+            pivot.rotation.set(0, 0, 0);
+            pivot.updateMatrixWorld();
+
+            allCubes.forEach((cube) => {
+                cubeGroup.attach(cube);
+                cube.position.copy(cube.userData.initialPosition);
+                cube.quaternion.copy(cube.userData.initialQuaternion);
+                cube.rotation.setFromQuaternion(cube.quaternion);
+                cube.updateMatrix();
+                cube.updateMatrixWorld();
+            });
+
+            moveQueue = [];
+            moveHistory = [];
+            shouldClearHistoryAfterSolve = false;
+            shouldForceSolveAfterQueue = false;
+            renderHistoryUI();
+        }
+
+        function updateUIState(working) {
+            btnShuffle.disabled = working;
+            btnSolve.disabled = working || isCubeSolved();
+        }
+
+        function processQueue() {
+            if (moveQueue.length === 0 || isAnimating) {
+                if (moveQueue.length === 0 && !isAnimating) {
+                    updateUIState(false);
+                }
+                return;
+            }
+
+            isAnimating = true;
+            updateUIState(true);
+            currentMove = moveQueue.shift();
+
+            if (currentMove.isReverting && currentMove.historyIndex !== undefined) {
+                const logEl = document.getElementById(`log-${currentMove.historyIndex}`);
+                if (logEl) {
+                    logEl.classList.add('reverting');
+                    logEl.textContent += '（已还原）';
+                }
+            }
+
+            pivot.rotation.set(0, 0, 0);
+            pivot.updateMatrixWorld();
+
+            activeCubes = allCubes.filter((cube) => {
+                const pos = cube.position[currentMove.axis];
+                const targetPos = currentMove.layer * OFFSET;
+                return Math.abs(pos - targetPos) < 0.1;
+            });
+
+            activeCubes.forEach((cube) => pivot.attach(cube));
+            targetAngle = currentMove.direction * (Math.PI / 2);
+            currentAngle = 0;
+        }
+
+        function addMove(axis, layer, direction, record = true, isReverting = false, historyIndex = -1) {
+            moveQueue.push({ axis, layer, direction, isReverting, historyIndex });
+
+            if (record) {
+                moveHistory.push({ axis, layer, direction });
+                renderHistoryUI();
+            }
+
+            if (!isAnimating) {
+                processQueue();
+            }
+        }
+
+        function getNormalizedMousePos(event) {
+            return {
+                x: (event.clientX / window.innerWidth) * 2 - 1,
+                y: -(event.clientY / window.innerHeight) * 2 + 1
+            };
+        }
+
+        function resetPointerState() {
+            clickedCube = null;
+            intersectNormal = null;
+            controls.enabled = true;
+        }
+
+        function isPrimaryAction(event) {
+            return event.pointerType !== 'mouse' || event.button === 0;
+        }
+
+        function stopUiPropagation(event) {
+            event.stopPropagation();
+        }
+
+        [uiContainerEl, historyPanelEl].forEach((element) => {
+            ['pointerdown', 'pointerup', 'pointercancel', 'click'].forEach((eventName) => {
+                element.addEventListener(eventName, stopUiPropagation);
+            });
+        });
+
+        window.addEventListener('contextmenu', (event) => event.preventDefault());
+
+        window.addEventListener('pointerdown', (event) => {
+            if (isAnimating || !isPrimaryAction(event)) {
+                return;
+            }
+
+            const pos = getNormalizedMousePos(event);
+            mouse.set(pos.x, pos.y);
+            startMouse.copy(mouse);
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(cubeGroup.children);
+
+            if (intersects.length > 0) {
+                controls.enabled = false;
+                clickedCube = intersects[0].object;
+
+                const normalMatrix = new THREE.Matrix3().getNormalMatrix(clickedCube.matrixWorld);
+                intersectNormal = intersects[0].face.normal.clone().applyMatrix3(normalMatrix).normalize();
+                intersectNormal.x = Math.round(intersectNormal.x);
+                intersectNormal.y = Math.round(intersectNormal.y);
+                intersectNormal.z = Math.round(intersectNormal.z);
+            }
+        });
+
+        window.addEventListener('pointerup', (event) => {
+            if (!clickedCube || !intersectNormal) {
+                resetPointerState();
+                return;
+            }
+
+            controls.enabled = true;
+
+            const pos = getNormalizedMousePos(event);
+            mouse.set(pos.x, pos.y);
+
+            const dragDistance = startMouse.distanceTo(mouse);
+            if (dragDistance > 0.05) {
+                const p1 = new THREE.Vector3(startMouse.x, startMouse.y, 0.5).unproject(camera);
+                const p2 = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
+                const dragVectorWorld = p2.sub(p1).normalize();
+                const rotationAxisVec = new THREE.Vector3().crossVectors(intersectNormal, dragVectorWorld);
+
+                let axis = 'x';
+                let maxVal = Math.abs(rotationAxisVec.x);
+                let direction = Math.sign(rotationAxisVec.x);
+
+                if (Math.abs(rotationAxisVec.y) > maxVal) {
+                    axis = 'y';
+                    maxVal = Math.abs(rotationAxisVec.y);
+                    direction = Math.sign(rotationAxisVec.y);
+                }
+
+                if (Math.abs(rotationAxisVec.z) > maxVal) {
+                    axis = 'z';
+                    maxVal = Math.abs(rotationAxisVec.z);
+                    direction = Math.sign(rotationAxisVec.z);
+                }
+
+                const layerPos = clickedCube.position[axis];
+                const layer = Math.round(layerPos / OFFSET);
+                addMove(axis, layer, direction >= 0 ? 1 : -1, true);
+            }
+
+            resetPointerState();
+        });
+
+        window.addEventListener('pointercancel', resetPointerState);
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        });
+
+        btnShuffle.addEventListener('click', () => {
+            shouldClearHistoryAfterSolve = false;
+            shouldForceSolveAfterQueue = false;
+            moveHistory = [];
+            renderHistoryUI();
+
+            for (let i = 0; i < 20; i += 1) {
+                const randomAxis = axes[Math.floor(Math.random() * axes.length)];
+                const randomLayer = layers[Math.floor(Math.random() * layers.length)];
+                const randomDir = directions[Math.floor(Math.random() * directions.length)];
+                addMove(randomAxis, randomLayer, randomDir, true);
+            }
+        });
+
+        btnSolve.addEventListener('click', () => {
+            if (shouldClearHistoryAfterSolve || isCubeSolved()) {
+                return;
+            }
+
+            if (moveHistory.length === 0) {
+                forceSolveCubeState();
+                updateUIState(false);
+                return;
+            }
+
+            const historySnapshot = [...moveHistory];
+            shouldClearHistoryAfterSolve = true;
+            shouldForceSolveAfterQueue = true;
+
+            for (let i = historySnapshot.length - 1; i >= 0; i -= 1) {
+                const move = historySnapshot[i];
+                addMove(move.axis, move.layer, move.direction * -1, false, true, i);
+            }
+        });
+
+        function finalizeMove() {
+            pivot.rotation[currentMove.axis] = targetAngle;
+            pivot.updateMatrixWorld();
+
+            activeCubes.forEach((cube) => {
+                cubeGroup.attach(cube);
+                cube.position.x = Math.round(cube.position.x / OFFSET) * OFFSET;
+                cube.position.y = Math.round(cube.position.y / OFFSET) * OFFSET;
+                cube.position.z = Math.round(cube.position.z / OFFSET) * OFFSET;
+
+                cube.rotation.x = Math.round(cube.rotation.x / (Math.PI / 2)) * (Math.PI / 2);
+                cube.rotation.y = Math.round(cube.rotation.y / (Math.PI / 2)) * (Math.PI / 2);
+                cube.rotation.z = Math.round(cube.rotation.z / (Math.PI / 2)) * (Math.PI / 2);
+                cube.updateMatrix();
+            });
+
+            isAnimating = false;
+
+            const finishedSolve = currentMove.isReverting && moveQueue.length === 0;
+            if (finishedSolve && shouldForceSolveAfterQueue) {
+                forceSolveCubeState();
+            }
+
+            processQueue();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (isAnimating) {
+                const step = ANIMATION_SPEED * Math.sign(targetAngle);
+                if (Math.abs(targetAngle - currentAngle) <= Math.abs(step)) {
+                    finalizeMove();
+                } else {
+                    currentAngle += step;
+                    pivot.rotation[currentMove.axis] = currentAngle;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function getCubeStateSignature() {
+            return allCubes
+                .map((cube) => {
+                    const position = [cube.position.x, cube.position.y, cube.position.z]
+                        .map((value) => Math.round(value / OFFSET))
+                        .join(',');
+                    const quaternion = [cube.quaternion.x, cube.quaternion.y, cube.quaternion.z, cube.quaternion.w]
+                        .map((value) => Math.round(value * 1000))
+                        .join(',');
+                    return `${position}|${quaternion}`;
+                })
+                .sort()
+                .join(';');
+        }
+
+        function waitForIdle(timeoutMs = 20000) {
+            return new Promise((resolve, reject) => {
+                const startTime = performance.now();
+
+                function check() {
+                    if (!isAnimating && moveQueue.length === 0) {
+                        resolve();
+                        return;
+                    }
+
+                    if (performance.now() - startTime > timeoutMs) {
+                        reject(new Error('waitForIdle timeout'));
+                        return;
+                    }
+
+                    requestAnimationFrame(check);
+                }
+
+                check();
+            });
+        }
+
+        function exposeTestApi() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('test') !== '1' && params.get('autorunTest') !== '1') {
+                return;
+            }
+
+            window.__mofangTest = {
+                addMove,
+                clickShuffle: () => btnShuffle.click(),
+                clickSolve: () => btnSolve.click(),
+                getCubeStateSignature,
+                waitForIdle,
+                getState: () => ({
+                    moveHistoryLength: moveHistory.length,
+                    moveQueueLength: moveQueue.length,
+                    isAnimating
+                })
+            };
+        }
+
+        async function runAutoRestoreSelfTest() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('autorunTest') !== '1') {
+                return;
+            }
+
+            const resultEl = document.createElement('pre');
+            resultEl.id = 'test-result';
+            resultEl.style.position = 'absolute';
+            resultEl.style.left = '8px';
+            resultEl.style.bottom = '8px';
+            resultEl.style.zIndex = '99';
+            resultEl.style.padding = '8px 10px';
+            resultEl.style.background = 'rgba(0, 0, 0, 0.75)';
+            resultEl.style.color = '#fff';
+            resultEl.style.fontSize = '12px';
+            resultEl.style.borderRadius = '8px';
+            resultEl.style.pointerEvents = 'none';
+            document.body.appendChild(resultEl);
+
+            try {
+                await waitForIdle();
+                const solvedSignature = getCubeStateSignature();
+
+                btnShuffle.click();
+                await waitForIdle();
+                const shuffledSignature = getCubeStateSignature();
+
+                btnSolve.click();
+                await waitForIdle();
+                const restoredSignature = getCubeStateSignature();
+
+                const passed = solvedSignature === restoredSignature && solvedSignature !== shuffledSignature;
+                resultEl.textContent = passed
+                    ? 'PASS:auto-restore'
+                    : `FAIL:auto-restore\nsolved=${solvedSignature}\nshuffled=${shuffledSignature}\nrestored=${restoredSignature}`;
+            } catch (error) {
+                resultEl.textContent = `ERROR:auto-restore\n${error.message}`;
+            }
+        }
+
+        createCube();
+        updateUIState(false);
+        exposeTestApi();
+        animate();
+        runAutoRestoreSelfTest();
+    </script>
+</body>
+</html>
