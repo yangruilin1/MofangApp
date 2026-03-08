@@ -198,6 +198,8 @@
         <ul id="history-list"></ul>
     </div>
 
+    <script src="./vendor/cubejs/cube.js"></script>
+    <script src="./vendor/cubejs/async.js"></script>
     <script type="module">
         import * as THREE from './vendor/three.module.js';
         import { OrbitControls } from './vendor/OrbitControls.js';
@@ -268,6 +270,77 @@
 
         let shouldClearHistoryAfterSolve = false;
         let shouldForceSolveAfterQueue = false;
+        let solverReady = false;
+        let solverBusy = false;
+
+        const cubeSolver = window.Cube;
+        const faceColorToNotation = new Map([
+            [0xb90000, 'R'],
+            [0xff5900, 'L'],
+            [0xffffff, 'U'],
+            [0xffd500, 'D'],
+            [0x009b48, 'F'],
+            [0x0045ad, 'B']
+        ]);
+        const localFaceNormals = [
+            new THREE.Vector3(1, 0, 0),
+            new THREE.Vector3(-1, 0, 0),
+            new THREE.Vector3(0, 1, 0),
+            new THREE.Vector3(0, -1, 0),
+            new THREE.Vector3(0, 0, 1),
+            new THREE.Vector3(0, 0, -1)
+        ];
+        const cubeFaceSpecs = {
+            U: {
+                normal: new THREE.Vector3(0, 1, 0),
+                positions: [[-1, 1, -1], [0, 1, -1], [1, 1, -1], [-1, 1, 0], [0, 1, 0], [1, 1, 0], [-1, 1, 1], [0, 1, 1], [1, 1, 1]]
+            },
+            R: {
+                normal: new THREE.Vector3(1, 0, 0),
+                positions: [[1, 1, 1], [1, 1, 0], [1, 1, -1], [1, 0, 1], [1, 0, 0], [1, 0, -1], [1, -1, 1], [1, -1, 0], [1, -1, -1]]
+            },
+            F: {
+                normal: new THREE.Vector3(0, 0, 1),
+                positions: [[-1, 1, 1], [0, 1, 1], [1, 1, 1], [-1, 0, 1], [0, 0, 1], [1, 0, 1], [-1, -1, 1], [0, -1, 1], [1, -1, 1]]
+            },
+            D: {
+                normal: new THREE.Vector3(0, -1, 0),
+                positions: [[-1, -1, 1], [0, -1, 1], [1, -1, 1], [-1, -1, 0], [0, -1, 0], [1, -1, 0], [-1, -1, -1], [0, -1, -1], [1, -1, -1]]
+            },
+            L: {
+                normal: new THREE.Vector3(-1, 0, 0),
+                positions: [[-1, 1, -1], [-1, 1, 0], [-1, 1, 1], [-1, 0, -1], [-1, 0, 0], [-1, 0, 1], [-1, -1, -1], [-1, -1, 0], [-1, -1, 1]]
+            },
+            B: {
+                normal: new THREE.Vector3(0, 0, -1),
+                positions: [[1, 1, -1], [0, 1, -1], [-1, 1, -1], [1, 0, -1], [0, 0, -1], [-1, 0, -1], [1, -1, -1], [0, -1, -1], [-1, -1, -1]]
+            }
+        };
+        const faceMoveToAppMove = {
+            U: { axis: 'y', layer: 1, direction: -1 },
+            R: { axis: 'x', layer: 1, direction: -1 },
+            F: { axis: 'z', layer: 1, direction: -1 },
+            D: { axis: 'y', layer: -1, direction: 1 },
+            L: { axis: 'x', layer: -1, direction: 1 },
+            B: { axis: 'z', layer: -1, direction: 1 }
+        };
+        const solvedFaceletString = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB';
+        const wholeCubeRotationPermutations = {
+            'x+': [5, 1, 0, 2, 4, 3],
+            'x-': [2, 1, 3, 5, 4, 0],
+            'y+': [0, 2, 4, 3, 5, 1],
+            'y-': [0, 5, 1, 3, 2, 4],
+            'z+': [1, 3, 2, 4, 0, 5],
+            'z-': [4, 0, 2, 1, 3, 5]
+        };
+        const wholeCubeRotationMoves = {
+            'x+': [{ axis: 'x', layer: 1, direction: 1 }, { axis: 'x', layer: 0, direction: 1 }, { axis: 'x', layer: -1, direction: 1 }],
+            'x-': [{ axis: 'x', layer: 1, direction: -1 }, { axis: 'x', layer: 0, direction: -1 }, { axis: 'x', layer: -1, direction: -1 }],
+            'y+': [{ axis: 'y', layer: 1, direction: 1 }, { axis: 'y', layer: 0, direction: 1 }, { axis: 'y', layer: -1, direction: 1 }],
+            'y-': [{ axis: 'y', layer: 1, direction: -1 }, { axis: 'y', layer: 0, direction: -1 }, { axis: 'y', layer: -1, direction: -1 }],
+            'z+': [{ axis: 'z', layer: 1, direction: 1 }, { axis: 'z', layer: 0, direction: 1 }, { axis: 'z', layer: -1, direction: 1 }],
+            'z-': [{ axis: 'z', layer: 1, direction: -1 }, { axis: 'z', layer: 0, direction: -1 }, { axis: 'z', layer: -1, direction: -1 }]
+        };
 
         const axes = ['x', 'y', 'z'];
         const layers = [-1, 0, 1];
@@ -363,12 +436,194 @@
             }
         }
 
-        function isCubeSolved() {
-            return allCubes.every((cube) => {
-                const positionMatches = cube.position.distanceTo(cube.userData.initialPosition) < 0.001;
-                const quaternionMatches = cube.quaternion.angleTo(cube.userData.initialQuaternion) < 0.001;
-                return positionMatches && quaternionMatches;
+        function roundCubeCoordinate(value) {
+            return Math.round(value / OFFSET);
+        }
+
+        function findCubeAtPosition(targetPosition) {
+            const targetKey = targetPosition.join(',');
+            const cube = allCubes.find((item) => {
+                const cubeKey = [item.position.x, item.position.y, item.position.z]
+                    .map(roundCubeCoordinate)
+                    .join(',');
+                return cubeKey === targetKey;
             });
+
+            if (!cube) {
+                throw new Error(`Cubie not found at ${targetKey}`);
+            }
+
+            return cube;
+        }
+
+        function getStickerNotation(cube, faceNormal) {
+            for (let index = 0; index < localFaceNormals.length; index += 1) {
+                const worldNormal = localFaceNormals[index].clone().applyQuaternion(cube.quaternion);
+                if (worldNormal.distanceTo(faceNormal) < 0.001) {
+                    const notation = faceColorToNotation.get(cube.material[index].color.getHex());
+                    if (!notation) {
+                        throw new Error('Outer sticker color not found');
+                    }
+                    return notation;
+                }
+            }
+
+            throw new Error('Sticker normal not found');
+        }
+
+        function getCubeFaceletString() {
+            return ['U', 'R', 'F', 'D', 'L', 'B']
+                .map((face) => {
+                    const spec = cubeFaceSpecs[face];
+                    return spec.positions
+                        .map((position) => getStickerNotation(findCubeAtPosition(position), spec.normal))
+                        .join('');
+                })
+                .join('');
+        }
+
+        function convertAlgorithmToMoves(algorithm) {
+            if (!algorithm || !algorithm.trim()) {
+                return [];
+            }
+
+            return algorithm.trim().split(/\s+/).flatMap((token) => {
+                const face = token[0];
+                const suffix = token.slice(1);
+                const baseMove = faceMoveToAppMove[face];
+
+                if (!baseMove) {
+                    return [];
+                }
+
+                const turns = suffix === '2' ? 2 : 1;
+                const direction = suffix === "'" ? baseMove.direction * -1 : baseMove.direction;
+
+                return Array.from({ length: turns }, () => ({
+                    axis: baseMove.axis,
+                    layer: baseMove.layer,
+                    direction
+                }));
+            });
+        }
+
+        function getCenterNotationString(faceletString) {
+            return [4, 13, 22, 31, 40, 49].map((index) => faceletString[index]).join('');
+        }
+
+        function applyWholeCubeRotationToCenterString(centerString, rotationKey) {
+            const permutation = wholeCubeRotationPermutations[rotationKey];
+            return permutation.map((index) => centerString[index]).join('');
+        }
+
+        function findOrientationFixMoves(faceletString) {
+            const start = getCenterNotationString(faceletString);
+            const target = 'URFDLB';
+            if (start === target) {
+                return [];
+            }
+
+            const queue = [{ centers: start, rotations: [] }];
+            const visited = new Set([start]);
+            const rotationKeys = Object.keys(wholeCubeRotationPermutations);
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+                for (const rotationKey of rotationKeys) {
+                    const nextCenters = applyWholeCubeRotationToCenterString(current.centers, rotationKey);
+                    if (visited.has(nextCenters)) {
+                        continue;
+                    }
+
+                    const nextRotations = [...current.rotations, rotationKey];
+                    if (nextCenters === target) {
+                        return nextRotations.flatMap((key) => wholeCubeRotationMoves[key]);
+                    }
+
+                    visited.add(nextCenters);
+                    queue.push({ centers: nextCenters, rotations: nextRotations });
+                }
+            }
+
+            return [];
+        }
+
+        function waitForSolverReady(timeoutMs = 30000) {
+            return new Promise((resolve, reject) => {
+                const startTime = performance.now();
+
+                function check() {
+                    if (solverReady) {
+                        resolve();
+                        return;
+                    }
+
+                    if (performance.now() - startTime > timeoutMs) {
+                        reject(new Error('waitForSolverReady timeout'));
+                        return;
+                    }
+
+                    window.setTimeout(check, 50);
+                }
+
+                check();
+            });
+        }
+
+        function initializeCubeSolver() {
+            if (!cubeSolver || !cubeSolver.asyncInit) {
+                console.error('Cube solver is unavailable');
+                return;
+            }
+
+            cubeSolver.asyncInit('./vendor/cubejs/worker.js', () => {
+                solverReady = true;
+                solverBusy = false;
+                updateUIState(false);
+            });
+        }
+
+        function requestDirectSolve() {
+            if (!solverReady || solverBusy || isAnimating || moveQueue.length > 0 || isCubeSolved()) {
+                return;
+            }
+
+            solverBusy = true;
+            updateUIState(true);
+
+            try {
+                const faceletString = getCubeFaceletString();
+                const solvingCube = cubeSolver.fromString(faceletString);
+
+                solvingCube.asyncSolve((algorithm) => {
+                    solverBusy = false;
+
+                    const solvedRelativeCube = cubeSolver.fromString(faceletString);
+                    if (algorithm && algorithm.trim()) {
+                        solvedRelativeCube.move(algorithm);
+                    }
+
+                    const solutionMoves = convertAlgorithmToMoves(algorithm);
+                    const orientationFixMoves = findOrientationFixMoves(solvedRelativeCube.asString());
+                    const allSolutionMoves = [...solutionMoves, ...orientationFixMoves];
+
+                    allSolutionMoves.forEach((move) => {
+                        addMove(move.axis, move.layer, move.direction, false);
+                    });
+
+                    if (allSolutionMoves.length === 0) {
+                        updateUIState(false);
+                    }
+                });
+            } catch (error) {
+                solverBusy = false;
+                console.error(error);
+                updateUIState(false);
+            }
+        }
+
+        function isCubeSolved() {
+            return getCubeFaceletString() === solvedFaceletString;
         }
 
         function forceSolveCubeState() {
@@ -392,8 +647,9 @@
         }
 
         function updateUIState(working) {
-            btnShuffle.disabled = working;
-            btnSolve.disabled = working || isCubeSolved();
+            const busy = working || solverBusy;
+            btnShuffle.disabled = busy;
+            btnSolve.disabled = busy || !solverReady || isCubeSolved();
         }
 
         function processQueue() {
@@ -625,18 +881,7 @@
         }
 
         function getCubeStateSignature() {
-            return allCubes
-                .map((cube) => {
-                    const position = [cube.position.x, cube.position.y, cube.position.z]
-                        .map((value) => Math.round(value / OFFSET))
-                        .join(',');
-                    const quaternion = [cube.quaternion.x, cube.quaternion.y, cube.quaternion.z, cube.quaternion.w]
-                        .map((value) => Math.round(value * 1000))
-                        .join(',');
-                    return `${position}|${quaternion}`;
-                })
-                .sort()
-                .join(';');
+            return getCubeFaceletString();
         }
 
         function waitForIdle(timeoutMs = 20000) {
@@ -702,9 +947,12 @@
             document.body.appendChild(resultEl);
 
             try {
+                await waitForSolverReady();
                 await waitForIdle();
                 const solvedSignature = getCubeStateSignature();
 
+                btnShuffle.click();
+                await waitForIdle();
                 btnShuffle.click();
                 await waitForIdle();
                 const shuffledSignature = getCubeStateSignature();
@@ -722,8 +970,15 @@
             }
         }
 
+        btnSolve.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            requestDirectSolve();
+        }, true);
+
         createCube();
         updateUIState(false);
+        initializeCubeSolver();
         exposeTestApi();
         animate();
         runAutoRestoreSelfTest();
