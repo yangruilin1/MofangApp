@@ -886,7 +886,6 @@
 
         btnShuffle.addEventListener('click', () => {
             shouldResetHistoryAfterAutoSolve = false;
-            resetMoveHistory();
 
             for (let i = 0; i < 20; i += 1) {
                 const randomAxis = axes[Math.floor(Math.random() * axes.length)];
