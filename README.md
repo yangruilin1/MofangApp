@@ -1,4 +1,4 @@
-# MofangApp
+
 
 `MofangApp` 是一个基于 `WebView` 的安卓魔方应用工程。项目核心页面位于 `app/src/main/assets/index.html`，页面资源与依赖已本地打包，可在离线环境运行。
 

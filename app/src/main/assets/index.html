@@ -268,10 +268,9 @@
         const btnShuffle = document.getElementById('btn-shuffle');
         const btnSolve = document.getElementById('btn-solve');
 
-        let shouldClearHistoryAfterSolve = false;
-        let shouldForceSolveAfterQueue = false;
         let solverReady = false;
         let solverBusy = false;
+        let shouldResetHistoryAfterAutoSolve = false;
 
         const cubeSolver = window.Cube;
         const faceColorToNotation = new Map([
@@ -507,6 +506,87 @@
             });
         }
 
+        function normalizeMoveSequence(moves) {
+            const stack = [];
+
+            moves.forEach((move) => {
+                if (!move) {
+                    return;
+                }
+
+                const normalizedTurns = move.direction === 1 ? 1 : 3;
+                const lastMove = stack[stack.length - 1];
+
+                if (lastMove && lastMove.axis === move.axis && lastMove.layer === move.layer) {
+                    lastMove.turns = (lastMove.turns + normalizedTurns) % 4;
+                    if (lastMove.turns === 0) {
+                        stack.pop();
+                    }
+                    return;
+                }
+
+                stack.push({
+                    axis: move.axis,
+                    layer: move.layer,
+                    turns: normalizedTurns
+                });
+            });
+
+            return stack.flatMap((move) => {
+                if (move.turns === 1) {
+                    return [{ axis: move.axis, layer: move.layer, direction: 1 }];
+                }
+
+                if (move.turns === 2) {
+                    return [
+                        { axis: move.axis, layer: move.layer, direction: 1 },
+                        { axis: move.axis, layer: move.layer, direction: 1 }
+                    ];
+                }
+
+                return [{ axis: move.axis, layer: move.layer, direction: -1 }];
+            });
+        }
+
+        function getInverseHistoryMoves() {
+            if (moveHistory.length === 0) {
+                return [];
+            }
+
+            const reversedMoves = [...moveHistory]
+                .reverse()
+                .map((move) => ({
+                    axis: move.axis,
+                    layer: move.layer,
+                    direction: move.direction * -1
+                }));
+
+            return normalizeMoveSequence(reversedMoves);
+        }
+
+        function choosePreferredSolveMoves(solverMoves, historyMoves) {
+            const normalizedSolverMoves = normalizeMoveSequence(solverMoves);
+            const normalizedHistoryMoves = normalizeMoveSequence(historyMoves);
+
+            if (normalizedHistoryMoves.length === 0) {
+                return normalizedSolverMoves;
+            }
+
+            if (normalizedSolverMoves.length === 0) {
+                return normalizedHistoryMoves;
+            }
+
+            const shouldPreferHistory = normalizedHistoryMoves.length <= normalizedSolverMoves.length
+                || (normalizedHistoryMoves.length <= 8 && normalizedHistoryMoves.length <= normalizedSolverMoves.length + 1);
+
+            return shouldPreferHistory ? normalizedHistoryMoves : normalizedSolverMoves;
+        }
+
+        function resetMoveHistory() {
+            moveHistory = [];
+            renderHistoryUI();
+        }
+
         function getCenterNotationString(faceletString) {
             return [4, 13, 22, 31, 40, 49].map((index) => faceletString[index]).join('');
         }
@@ -605,13 +685,17 @@
 
                     const solutionMoves = convertAlgorithmToMoves(algorithm);
                     const orientationFixMoves = findOrientationFixMoves(solvedRelativeCube.asString());
-                    const allSolutionMoves = [...solutionMoves, ...orientationFixMoves];
+                    const solverMoves = [...solutionMoves, ...orientationFixMoves];
+                    const historyMoves = getInverseHistoryMoves();
+                    const preferredMoves = choosePreferredSolveMoves(solverMoves, historyMoves);
 
-                    allSolutionMoves.forEach((move) => {
+                    shouldResetHistoryAfterAutoSolve = preferredMoves.length > 0;
+
+                    preferredMoves.forEach((move) => {
                         addMove(move.axis, move.layer, move.direction, false);
                     });
 
-                    if (allSolutionMoves.length === 0) {
+                    if (preferredMoves.length === 0) {
                         updateUIState(false);
                     }
                 });
@@ -640,10 +724,8 @@
             });
 
             moveQueue = [];
-            moveHistory = [];
-            shouldClearHistoryAfterSolve = false;
-            shouldForceSolveAfterQueue = false;
-            renderHistoryUI();
+            shouldResetHistoryAfterAutoSolve = false;
+            resetMoveHistory();
         }
 
         function updateUIState(working) {
@@ -803,10 +885,8 @@
         });
 
         btnShuffle.addEventListener('click', () => {
-            shouldClearHistoryAfterSolve = false;
-            shouldForceSolveAfterQueue = false;
-            moveHistory = [];
-            renderHistoryUI();
+            shouldResetHistoryAfterAutoSolve = false;
+            resetMoveHistory();
 
             for (let i = 0; i < 20; i += 1) {
                 const randomAxis = axes[Math.floor(Math.random() * axes.length)];
@@ -816,26 +896,6 @@
             }
         });
 
-        btnSolve.addEventListener('click', () => {
-            if (shouldClearHistoryAfterSolve || isCubeSolved()) {
-                return;
-            }
-
-            if (moveHistory.length === 0) {
-                forceSolveCubeState();
-                updateUIState(false);
-                return;
-            }
-
-            const historySnapshot = [...moveHistory];
-            shouldClearHistoryAfterSolve = true;
-            shouldForceSolveAfterQueue = true;
-
-            for (let i = historySnapshot.length - 1; i >= 0; i -= 1) {
-                const move = historySnapshot[i];
-                addMove(move.axis, move.layer, move.direction * -1, false, true, i);
-            }
-        });
 
         function finalizeMove() {
             pivot.rotation[currentMove.axis] = targetAngle;
@@ -855,9 +915,9 @@
 
             isAnimating = false;
 
-            const finishedSolve = currentMove.isReverting && moveQueue.length === 0;
-            if (finishedSolve && shouldForceSolveAfterQueue) {
-                forceSolveCubeState();
+            if (moveQueue.length === 0 && shouldResetHistoryAfterAutoSolve) {
+                shouldResetHistoryAfterAutoSolve = false;
+                resetMoveHistory();
             }
 
             processQueue();
@@ -951,6 +1011,13 @@
                 await waitForIdle();
                 const solvedSignature = getCubeStateSignature();
 
+                addMove('x', 1, 1, true);
+                await waitForIdle();
+                btnSolve.click();
+                await waitForIdle();
+                const singleMoveRestoredSignature = getCubeStateSignature();
+                const singleMovePassed = singleMoveRestoredSignature === solvedSignature;
+
                 btnShuffle.click();
                 await waitForIdle();
                 btnShuffle.click();
@@ -961,10 +1028,16 @@
                 await waitForIdle();
                 const restoredSignature = getCubeStateSignature();
 
-                const passed = solvedSignature === restoredSignature && solvedSignature !== shuffledSignature;
+                const shufflePassed = solvedSignature === restoredSignature && solvedSignature !== shuffledSignature;
+                const passed = singleMovePassed && shufflePassed;
                 resultEl.textContent = passed
                     ? 'PASS:auto-restore'
-                    : `FAIL:auto-restore\nsolved=${solvedSignature}\nshuffled=${shuffledSignature}\nrestored=${restoredSignature}`;
+                    : `FAIL:auto-restore
+singleMovePassed=${singleMovePassed}
+shufflePassed=${shufflePassed}
+solved=${solvedSignature}
+shuffled=${shuffledSignature}
+restored=${restoredSignature}`;
             } catch (error) {
                 resultEl.textContent = `ERROR:auto-restore\n${error.message}`;
             }
